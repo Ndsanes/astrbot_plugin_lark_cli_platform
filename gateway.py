@@ -67,7 +67,15 @@ class LarkGateway:
         except LarkKitError as exc:
             raise _wrap(exc) from exc
 
-    async def send_image(self, target: str, image_path: Path) -> None:
+    async def send_card(self, target: str, card: dict) -> None:
+        """以 bot 身份向 target 发送飞书卡片(msg_type=interactive)。"""
+        try:
+            await self.limiter.acquire()
+            await self._messenger.send_card(target, card)
+        except LarkKitError as exc:
+            raise _wrap(exc) from exc
+
+    async def send_image(self, target: str, image_path) -> None:
         """以 bot 身份发本地图片。"""
         try:
             await self.limiter.acquire()

@@ -72,7 +72,14 @@ _LEADING_MENTION = re.compile(r"^@\S+\s+")
 @register_platform_adapter(
     "lark_cli",
     "lark-cli 平台适配器(bot 身份收发)",
-    default_config_tmpl={"enabled_chats": [], "app_id": "", "app_secret": ""},
+    default_config_tmpl={
+        "enabled_chats": [],
+        "app_id": "",
+        "app_secret": "",
+        "notify_umos": [],
+        "auth_check_hours": 6,
+        "auth_warning_hours": 48,
+    },
 )
 class LarkCliPlatform(Platform):
     def __init__(self, platform_config: dict, platform_settings: dict, event_queue) -> None:
@@ -83,6 +90,7 @@ class LarkCliPlatform(Platform):
         self._messenger: LarkMessenger | None = None
         # 飞书能力网关:其他插件经 platform_manager 拿到本实例后使用
         self.gateway: LarkGateway | None = None
+        self._auth_task: asyncio.Task | None = None
 
     def meta(self) -> PlatformMetadata:
         # AstrBot 4.27+: PlatformMetadata 需要唯一实例 id
@@ -120,11 +128,122 @@ class LarkCliPlatform(Platform):
         logger.info("[lark_cli] 启动(4/4):事件消费进程拉起中...")
         self.gateway = LarkGateway(self._messenger)
         logger.info("[lark_cli] 飞书网关就绪(供其他插件调用 gateway.*)")
+        self._auth_task = asyncio.create_task(self._auth_loop())
         async for msg in self._stream.stream():
             if not self._chat_enabled(msg.chat_id, msg.chat_type):
                 continue
             abm = await self.convert_message(msg)
             await self.handle_msg(abm, msg.chat_id)
+
+    # ── 管理员通知与认证闭环 ──
+
+    def _notify_targets(self) -> list[str]:
+        """通知目标:notify_umos 配置的 UMO 列表,取末段会话 ID(oc_/ou_)。"""
+        targets = []
+        for umo in self.config.get("notify_umos") or []:
+            chat_id = str(umo).strip().split(":")[-1]
+            if chat_id.startswith(("oc_", "ou_")):
+                targets.append(chat_id)
+            elif str(umo).strip():
+                logger.warning("[lark_cli] notify_umos 条目无法解析会话 ID: %s", umo)
+        return targets
+
+    async def send_admin_card(self, card: dict) -> int:
+        """向全部 notify_umos 发送飞书卡片;返回成功条数。"""
+        if not self.gateway:
+            logger.warning("[lark_cli] 网关未就绪,无法发送管理卡片")
+            return 0
+        sent = 0
+        for chat_id in self._notify_targets():
+            try:
+                await self.gateway.send_card(chat_id, card)
+                sent += 1
+            except Exception as exc:  # noqa: BLE001 — 单个目标失败不阻断其余
+                logger.warning("[lark_cli] 管理卡片发送失败(%s): %s", chat_id, exc)
+        return sent
+
+    @staticmethod
+    def _build_reauth_card(reason: str, verification_url: str | None) -> dict:
+        """登录态异常授权卡片:说明 + 可点击跳转按钮。"""
+        elements: list[dict] = [
+            {"tag": "div", "text": {"tag": "plain_text", "content": reason}},
+        ]
+        if verification_url:
+            elements.append(
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "打开授权页面"},
+                            "type": "primary",
+                            "url": verification_url,
+                        }
+                    ],
+                }
+            )
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": "red",
+                "title": {"tag": "plain_text", "content": "lark_cli 登录态需要重新授权"},
+            },
+            "elements": elements,
+        }
+
+    async def begin_reauth(self, reason: str) -> str:
+        """发起设备授权并向管理员推授权卡片;返回结果描述。"""
+        if not self.gateway:
+            return "网关未就绪,无法发起授权"
+        targets = self._notify_targets()
+        if not targets:
+            return "未配置 notify_umos,无处推送授权卡片;请在平台实例配置中填写"
+        initiated = await self.gateway.auth_login_start()
+        url = initiated.get("verification_url")
+        sent = await self.send_admin_card(self._build_reauth_card(reason, url))
+        asyncio.get_running_loop().create_task(self._finish_reauth(initiated["device_code"]))
+        return f"已发起设备授权并推送卡片({sent}/{len(targets)});链接:{url}"
+
+    async def _finish_reauth(self, device_code: str) -> None:
+        try:
+            await self.gateway.auth_login_finish(device_code)
+            logger.info("[lark_cli] 用户重新授权完成")
+            await self.send_admin_card(
+                {
+                    "config": {"wide_screen_mode": True},
+                    "header": {
+                        "template": "green",
+                        "title": {"tag": "plain_text", "content": "lark_cli 登录态已恢复"},
+                    },
+                    "elements": [],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 — 超时/取消只记日志
+            logger.warning("[lark_cli] 重新授权未完成:%s", exc)
+
+    async def _auth_loop(self) -> None:
+        """周期检查用户登录态;状态恶化时自动发起重新授权并推卡片。"""
+        from astrbot_lark_kit import Health, health_of
+
+        interval_h = max(1, int(self.config.get("auth_check_hours") or 6))
+        warning_h = float(self.config.get("auth_warning_hours") or 48)
+        last: Health | None = None
+        while True:
+            await asyncio.sleep(interval_h * 3600)
+            if not self.gateway:
+                continue
+            try:
+                status = health_of(await self.gateway.auth_status(), warning_hours=warning_h)
+            except Exception as exc:  # noqa: BLE001 — 检查失败静默重试
+                logger.debug("[lark_cli] auth 检查失败:%s", exc)
+                continue
+            if status is last or status is Health.HEALTHY and last is Health.HEALTHY:
+                continue
+            if status is not Health.HEALTHY:
+                await self.begin_reauth(f"登录态健康状态:{status.value}")
+            last = status
+
+
     def _repair_bundled_binary(self) -> None:
         """解压器可能丢失可执行位/版本标记缺失:启动时就地修复(离线安全)。"""
         logger.info(f"[lark_cli][dbg] vendor={VENDOR_DIR} exists={VENDOR_DIR.exists()}")
