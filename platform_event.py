@@ -49,3 +49,17 @@ class LarkCliPlatformEvent(AstrMessageEvent):
     async def send(self, message: MessageChain):
         await _deliver(self._messenger, self.chat_id, message)
         await super().send(message)
+
+    async def send_streaming(self, generator, use_fallback: bool = False) -> None:
+        """不支持逐字流式:消费流并聚合全文,整条一次性投递。"""
+        parts: list[str] = []
+        async for chunk in generator:
+            for comp in getattr(chunk, "chain", None) or []:
+                text = getattr(comp, "text", None)
+                if isinstance(comp, Plain) and text:
+                    parts.append(text)
+        full_text = "".join(parts).strip()
+        if not full_text:
+            logger.warning("lark_cli 流式回复聚合后为空,跳过发送")
+            return
+        await self.send(MessageChain(chain=[Plain(full_text)]))
