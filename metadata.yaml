@@ -1,0 +1,10 @@
+name: astrbot_plugin_lark_cli_platform
+display_name: LarkCliPlatform
+desc: lark-cli 平台适配器:以 bot 身份把飞书消息接入 AstrBot Platform API。
+short_desc: lark-cli bot 身份的飞书平台适配器
+version: v0.1.1
+author: NDsans
+repo: https://github.com/Ndsanes/astrbot_plugin_lark_cli_platform
+support_platforms:
+  - lark_cli
+astrbot_version: ">=4.5.7"
