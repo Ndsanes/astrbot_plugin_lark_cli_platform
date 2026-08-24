@@ -138,6 +138,7 @@ class LarkCliPlatform(Platform):
         # 飞书能力网关:其他插件经 platform_manager 拿到本实例后使用
         self.gateway: LarkGateway | None = None
         self._auth_task: asyncio.Task | None = None
+        self._reauth_task: asyncio.Task | None = None
 
     def meta(self) -> PlatformMetadata:
         # AstrBot 4.27+: PlatformMetadata 需要唯一实例 id
@@ -248,16 +249,24 @@ class LarkCliPlatform(Platform):
         return ",".join(parts) or "docs,drive,wiki"
 
     async def begin_reauth(self, reason: str) -> str:
-        """发起设备授权并向管理员推授权卡片;返回结果描述。"""
+        """发起设备授权并向管理员推授权卡片;返回结果描述。
+
+        在途防重入:已有未完成的授权轮询时跳过,避免两个设备码并存。
+        """
         if not self.gateway:
             return "网关未就绪,无法发起授权"
+        if self._reauth_task is not None and not self._reauth_task.done():
+            return "已有设备授权在途,跳过重复发起"
         targets = self._notify_targets()
         if not targets:
             return "未配置 notify_umos,无处推送授权卡片;请在平台实例配置中填写"
         initiated = await self.gateway.auth_login_start(self._auth_login_domains())
         url = initiated.get("verification_url")
         sent = await self.send_admin_card(self._build_reauth_card(reason, url))
-        asyncio.get_running_loop().create_task(self._finish_reauth(initiated["device_code"]))
+        # 保存强引用:asyncio 只持弱引用,裸 create_task 可能被 GC 静默取消
+        self._reauth_task = asyncio.get_running_loop().create_task(
+            self._finish_reauth(initiated["device_code"])
+        )
         return f"已发起设备授权并推送卡片({sent}/{len(targets)});链接:{url}"
 
     async def _finish_reauth(self, device_code: str) -> None:
@@ -309,7 +318,10 @@ class LarkCliPlatform(Platform):
                             bad_streak += 1
                             if bad_streak == 1 or bad_streak % remind_every == 0:
                                 try:
-                                    await self.begin_reauth(f"登录态健康状态:{status.value}")
+                                    result = await self.begin_reauth(
+                                        f"登录态健康状态:{status.value}"
+                                    )
+                                    logger.warning("[lark_cli] 自动重新授权:%s", result)
                                 except Exception as exc:  # noqa: BLE001
                                     logger.warning("[lark_cli] 自动授权发起失败:%s", exc)
             except asyncio.CancelledError:
@@ -366,18 +378,18 @@ class LarkCliPlatform(Platform):
         binary = find_bundled_cli(VENDOR_DIR)
         if binary is not None:
             return binary
-        if True:  # 自举是内部事务:二进制缺失时总是自动补齐,无用户开关
-            try:
-                from astrbot_lark_kit import bundled_cli_platform
-                plat = bundled_cli_platform()
-                plats = (plat,) if plat else ()
-                if plats:
-                    await asyncio.to_thread(ensure_bundled_cli, VENDOR_DIR, platforms=plats)
-                binary = find_bundled_cli(VENDOR_DIR)
-                if binary is not None:
-                    return binary
-            except Exception as exc:  # noqa: BLE001 — 自举失败降级 PATH 查找
-                logger.warning(f"lark_cli 自举下载失败:{exc}")
+        # 自举是内部事务:二进制缺失时总是自动补齐,无用户开关
+        try:
+            from astrbot_lark_kit import bundled_cli_platform
+            plat = bundled_cli_platform()
+            plats = (plat,) if plat else ()
+            if plats:
+                await asyncio.to_thread(ensure_bundled_cli, VENDOR_DIR, platforms=plats)
+            binary = find_bundled_cli(VENDOR_DIR)
+            if binary is not None:
+                return binary
+        except Exception as exc:  # noqa: BLE001 — 自举失败降级 PATH 查找
+            logger.warning(f"lark_cli 自举下载失败:{exc}")
         try:
             return resolve_cli_bin()
         except CliNotFoundError as exc:

@@ -98,23 +98,19 @@ class LarkGateway:
         data: dict[str, Any] | None = None,
         as_identity: str = "bot",
     ) -> dict[str, Any]:
-        """任意 open-apis 端点透传(lark-cli ``api`` 逃逸通道)。
+        """任意 open-apis 端点透传(lark-cli ``api`` 逃逸通道),委托 :meth:`call`。
 
-        成功返回响应 JSON 的 data 部分;非 2xx 或鉴权失败抛 LarkGatewayError。
-        as_identity 显式钉死调用身份,默认 bot——不钉时 CLI defaultAs=auto 会
-        在双身份并存(管理员完成过设备授权)时静默解析为 user。
+        返回响应 document 或 data 的 dict 部分(契约与 :meth:`call` 一致);
+        非 2xx 或鉴权失败抛 LarkGatewayError。as_identity 显式钉死调用身份,
+        默认 bot——不钉时 CLI defaultAs=auto 会在双身份并存(管理员完成过
+        设备授权)时静默解析为 user。
         """
         args = ["api", method.upper(), path]
         if params is not None:
             args += ["--params", json.dumps(params, ensure_ascii=False)]
         if data is not None:
             args += ["--data", json.dumps(data, ensure_ascii=False)]
-        envelope = await self._run(apply_identity(args, as_identity))
-        doc = envelope.document
-        if isinstance(doc, dict) and doc:
-            return doc
-        payload = envelope.data
-        return payload if isinstance(payload, dict) else {}
+        return await self.call(args, as_identity=as_identity)
 
     # ── 通用命令通配层 ──
 
@@ -179,15 +175,14 @@ class LarkGateway:
             [
                 "docs",
                 "+fetch",
-                "--as",
-                "user",
                 "--doc",
                 doc_ref,
                 "--doc-format",
                 fmt,
                 "--detail",
                 "simple",
-            ]
+            ],
+            as_identity="user",
         )
         content = envelope.document.get("content") if isinstance(envelope.document, dict) else None
         if not isinstance(content, str):
@@ -206,8 +201,6 @@ class LarkGateway:
                 [
                     "docs",
                     "+update",
-                    "--as",
-                    "user",
                     "--doc",
                     doc_ref,
                     "--command",
@@ -217,6 +210,7 @@ class LarkGateway:
                     "--doc-format",
                     "markdown",
                 ],
+                as_identity="user",
                 timeout_s=_MEDIA_TIMEOUT_S,
                 cwd=td,
             )

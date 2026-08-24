@@ -1,4 +1,4 @@
 # 运行时零第三方 pip 依赖:
 # 消息收发经同仓 astrbot_lark_kit(vendored 于插件包或随根环境安装),
-# lark-cli 二进制由打包脚本放入 vendor/lark-cli/(bootstrap_cli=true 时可自举下载)。
+# lark-cli 二进制由打包脚本放入 vendor/lark-cli/(缺失时适配器无条件自举下载)。
 # 本文件仅为 AstrBot 插件规范占位。

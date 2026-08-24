@@ -51,7 +51,12 @@ class LarkCliPlatformEvent(AstrMessageEvent):
         await super().send(message)
 
     async def send_streaming(self, generator, use_fallback: bool = False) -> None:
-        """不支持逐字流式:消费流并聚合全文,整条一次性投递。"""
+        """不支持逐字流式:消费流并聚合全文,整条一次性投递。
+
+        先走基类记账(指标上报/_has_send_oper);基类默认实现不消费生成器,
+        聚合逻辑不受影响。
+        """
+        await super().send_streaming(generator, use_fallback)
         parts: list[str] = []
         async for chunk in generator:
             for comp in getattr(chunk, "chain", None) or []:
