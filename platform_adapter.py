@@ -101,6 +101,12 @@ LARK_CONFIG_METADATA = {
         "type": "int",
         "hint": "剩余有效期低于该值即视为临期并提醒;仅 user_auth_enabled 开启时生效",
     },
+    "auth_login_domains": {
+        "description": "设备授权申请的能力域",
+        "type": "string",
+        "hint": "逗号分隔(docs,drive,wiki,im,sheets,base,contact 等);"
+                "决定 user 令牌可用的能力面",
+    },
 }
 
 
@@ -114,6 +120,7 @@ LARK_CONFIG_METADATA = {
         "user_auth_enabled": True,
         "auth_check_hours": 6,
         "auth_warning_hours": 48,
+        "auth_login_domains": "docs,drive,wiki",
     },
     config_metadata=LARK_CONFIG_METADATA,
     # CLI 每次调用发送完整消息,不支持逐字流式:由核心缓冲整段后一次性下发
@@ -234,6 +241,12 @@ class LarkCliPlatform(Platform):
             "elements": elements,
         }
 
+    def _auth_login_domains(self) -> str:
+        """设备授权申请的能力域(逗号分隔),来自 auth_login_domains 配置。"""
+        raw = str(self.config.get("auth_login_domains") or "docs,drive,wiki")
+        parts = [p.strip() for p in re.split(r"[,\s]+", raw) if p.strip()]
+        return ",".join(parts) or "docs,drive,wiki"
+
     async def begin_reauth(self, reason: str) -> str:
         """发起设备授权并向管理员推授权卡片;返回结果描述。"""
         if not self.gateway:
@@ -241,7 +254,7 @@ class LarkCliPlatform(Platform):
         targets = self._notify_targets()
         if not targets:
             return "未配置 notify_umos,无处推送授权卡片;请在平台实例配置中填写"
-        initiated = await self.gateway.auth_login_start()
+        initiated = await self.gateway.auth_login_start(self._auth_login_domains())
         url = initiated.get("verification_url")
         sent = await self.send_admin_card(self._build_reauth_card(reason, url))
         asyncio.get_running_loop().create_task(self._finish_reauth(initiated["device_code"]))
@@ -265,26 +278,45 @@ class LarkCliPlatform(Platform):
             logger.warning("[lark_cli] 重新授权未完成:%s", exc)
 
     async def _auth_loop(self) -> None:
-        """周期检查用户登录态;状态恶化时自动发起重新授权并推卡片。"""
-        from astrbot_lark_kit import Health, health_of
+        """用户登录态自动维护:启动即首查,之后每 auth_check_hours 检查一次。
+
+        - 判定为非 HEALTHY(含从未授权的冷启动):立即发起设备授权并推卡片;
+        - 持续非健康:每隔约 24h 重发一次授权卡片提醒;
+        - 单轮检查/授权失败只告警,绝不终止循环。
+        """
+        from astrbot_lark_kit import Health, auth_status_from_dict, health_of
 
         interval_h = max(1, int(self.config.get("auth_check_hours") or 6))
         warning_h = float(self.config.get("auth_warning_hours") or 48)
-        last: Health | None = None
+        remind_every = max(1, round(24 / interval_h))
+        bad_streak = 0
+        logger.info("[lark_cli] 登录态维护已启动(启动即首查,间隔 %sh)", interval_h)
         while True:
-            await asyncio.sleep(interval_h * 3600)
-            if not self.gateway:
-                continue
             try:
-                status = health_of(await self.gateway.auth_status(), warning_hours=warning_h)
-            except Exception as exc:  # noqa: BLE001 — 检查失败静默重试
-                logger.debug("[lark_cli] auth 检查失败:%s", exc)
-                continue
-            if status is last or status is Health.HEALTHY and last is Health.HEALTHY:
-                continue
-            if status is not Health.HEALTHY:
-                await self.begin_reauth(f"登录态健康状态:{status.value}")
-            last = status
+                if self.gateway is not None:
+                    try:
+                        status = health_of(
+                            auth_status_from_dict(await self.gateway.auth_status()),
+                            warning_hours=warning_h,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — 检查失败下轮重试
+                        logger.warning("[lark_cli] 登录态检查失败:%s", exc)
+                        status = None
+                    if status is not None:
+                        if status is Health.HEALTHY:
+                            bad_streak = 0
+                        else:
+                            bad_streak += 1
+                            if bad_streak == 1 or bad_streak % remind_every == 0:
+                                try:
+                                    await self.begin_reauth(f"登录态健康状态:{status.value}")
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.warning("[lark_cli] 自动授权发起失败:%s", exc)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 循环不因单次异常退出
+                logger.warning("[lark_cli] 登录态维护循环异常:%s", exc)
+            await asyncio.sleep(interval_h * 3600)
 
 
     def _repair_bundled_binary(self) -> None:

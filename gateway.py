@@ -158,6 +158,7 @@ class LarkGateway:
             await self.limiter.acquire()
             envelope = await run_lark_cli(
                 apply_identity(list(cli_args), as_identity),
+                bin_path=self._binary(),
                 extra_env=self._messenger_env(),
                 timeout_s=timeout_s,
                 cwd=cwd,
@@ -269,6 +270,7 @@ class LarkGateway:
                 await self.limiter.acquire()
                 envelope = await run_lark_cli(
                     list(args),
+                    bin_path=self._binary(),
                     extra_env=self._messenger_env(),
                     timeout_s=_MEDIA_TIMEOUT_S,
                     cwd=str(dest_dir),
@@ -291,9 +293,13 @@ class LarkGateway:
         """lark-cli auth status 的原始 JSON(未配置/过期时抛 LarkGatewayError)。"""
         return await self._run_json(["auth", "status"])
 
-    async def auth_login_start(self, domain: str = "feishu") -> dict[str, Any]:
-        """发起设备授权,返回含 verification_url/device_code 的 JSON。"""
-        obj = await self._run_json(["auth", "login", "--domain", domain, "--no-wait", "--json"])
+    async def auth_login_start(self, domains: str = "docs,drive,wiki") -> dict[str, Any]:
+        """发起设备授权,返回含 verification_url/device_code 的 JSON。
+
+        domains 为逗号分隔的 CLI 能力域(可用值见 ``lark-cli auth login --help``;
+        注意 "feishu" 不是合法域)。申请的域决定 user 令牌可用的能力面。
+        """
+        obj = await self._run_json(["auth", "login", "--domain", domains, "--no-wait", "--json"])
         if not isinstance(obj, dict) or not obj.get("device_code"):
             raise LarkGatewayError(f"设备授权响应缺字段:{obj}")
         return obj
@@ -314,11 +320,24 @@ class LarkGateway:
         """messenger 持有的子进程环境(HOME 登录态重定向等)。"""
         return getattr(self._messenger, "_env", None) or {}
 
-    async def _run(self, args: list[str], *, timeout_s: float = 30.0, cwd: str | None = None):
+    def _binary(self) -> Path | None:
+        """messenger 持有的二进制路径;网关绝不依赖环境 PATH 解析。"""
+        binary = getattr(self._messenger, "_binary", None)
+        return Path(binary) if binary else None
+
+    async def _run(
+        self,
+        args: list[str],
+        *,
+        as_identity: str | None = None,
+        timeout_s: float = 30.0,
+        cwd: str | None = None,
+    ):
         try:
             await self.limiter.acquire()
             return await run_lark_cli(
-                args,
+                apply_identity(list(args), as_identity),
+                bin_path=self._binary(),
                 extra_env=self._messenger_env(),
                 timeout_s=timeout_s,
                 cwd=cwd,
@@ -333,6 +352,7 @@ class LarkGateway:
             await self.limiter.acquire()
             return await run_lark_cli_json(
                 args,
+                bin_path=self._binary(),
                 extra_env=self._messenger_env(),
                 timeout_s=timeout_s,
             )

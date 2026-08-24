@@ -53,8 +53,9 @@ await gw.api("GET", "/open-apis/wiki/v4/spaces", params={"page_size": 20})
 | --- | --- | --- |
 | `app_id` / `app_secret` | 必填 | bot 凭据唯一权威来源,启动时播种进登录态目录 |
 | `notify_umos` | `[]` | 授权提醒/告警推送目标(取末段 oc_/ou_ 推卡片) |
-| `user_auth_enabled` | `true` | 是否启动 user 身份周期健康检查 |
+| `user_auth_enabled` | `true` | 开启 user 登录态自动维护:启动即首查,非健康自动推授权卡片 |
 | `auth_check_hours` / `auth_warning_hours` | `6` / `48` | 健康检查周期/提前告警阈值 |
+| `auth_login_domains` | `docs,drive,wiki` | 设备授权申请的能力域(逗号分隔),决定 user 令牌可用能力面 |
 | `bootstrap_cli` | `true` | 找不到二进制时自动下载到 `vendor/lark-cli/` |
 | `lark_cli_home` | 插件数据目录下 | 登录态 HOME 兼容键 |
 
