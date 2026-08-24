@@ -59,6 +59,7 @@ except ImportError:  # 开发环境:工作区源码或 pip 安装版
         resolve_state_home,
     )
 
+from .gateway import LarkGateway
 from .platform_event import LarkCliPlatformEvent, deliver_chain
 
 PLUGIN_DIR = Path(__file__).resolve().parent
@@ -80,6 +81,8 @@ class LarkCliPlatform(Platform):
         self.config = platform_config
         self._stream: EventStream | None = None
         self._messenger: LarkMessenger | None = None
+        # 飞书能力网关:其他插件经 platform_manager 拿到本实例后使用
+        self.gateway: LarkGateway | None = None
 
     def meta(self) -> PlatformMetadata:
         # AstrBot 4.27+: PlatformMetadata 需要唯一实例 id
@@ -115,6 +118,8 @@ class LarkCliPlatform(Platform):
         self._stream = EventStream(binary=binary, state_home=runtime_home,
                                    log_cb=lambda m: logger.info(f"[lark_cli][stream] {m}"))
         logger.info("[lark_cli] 启动(4/4):事件消费进程拉起中...")
+        self.gateway = LarkGateway(self._messenger)
+        logger.info("[lark_cli] 飞书网关就绪(供其他插件调用 gateway.*)")
         async for msg in self._stream.stream():
             if not self._chat_enabled(msg.chat_id, msg.chat_type):
                 continue
