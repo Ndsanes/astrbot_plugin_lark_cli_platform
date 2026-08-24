@@ -78,8 +78,9 @@ class LarkCliPlatform(Platform):
         self._messenger: LarkMessenger | None = None
 
     def meta(self) -> PlatformMetadata:
-        return PlatformMetadata("lark_cli", "lark-cli 平台适配器")
-
+        # AstrBot 4.27+: PlatformMetadata 需要唯一实例 id
+        return PlatformMetadata("lark_cli", "lark-cli 平台适配器",
+                                id=str(self.config.get("id") or "lark_cli"))
     async def run(self):
         logger.info("[lark_cli] 平台适配器启动中(1/4:数据目录)")
         data_dir = StarTools.get_data_dir("astrbot_plugin_lark_cli_platform")
