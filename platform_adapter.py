@@ -115,6 +115,8 @@ LARK_CONFIG_METADATA = {
         "auth_warning_hours": 48,
     },
     config_metadata=LARK_CONFIG_METADATA,
+    # CLI 每次调用发送完整消息,不支持逐字流式:由核心缓冲整段后一次性下发
+    support_streaming_message=False,
 )
 
 
