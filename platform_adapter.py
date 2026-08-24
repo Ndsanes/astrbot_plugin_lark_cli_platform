@@ -84,15 +84,21 @@ LARK_CONFIG_METADATA = {
         "type": "list",
         "hint": "登录态异常/授权链接等卡片推送到这些会话(取末段 oc_/ou_)",
     },
+    "user_auth_enabled": {
+        "description": "开启用户登录态维护",
+        "type": "bool",
+        "hint": "周期检查 user 登录态健康,临期/失效自动推授权卡片;"
+                 "关闭后仅可经 /lark_auth_login 手动授权",
+    },
     "auth_check_hours": {
         "description": "登录态健康检查间隔(小时)",
         "type": "int",
-        "hint": "状态恶化时自动发起重新授权并推卡片",
+        "hint": "状态恶化时自动发起重新授权并推卡片;仅 user_auth_enabled 开启时生效",
     },
     "auth_warning_hours": {
         "description": "登录态临期阈值(小时)",
         "type": "int",
-        "hint": "剩余有效期低于该值即视为临期并提醒",
+        "hint": "剩余有效期低于该值即视为临期并提醒;仅 user_auth_enabled 开启时生效",
     },
 }
 
@@ -104,6 +110,7 @@ LARK_CONFIG_METADATA = {
         "app_id": "",
         "app_secret": "",
         "notify_umos": [],
+        "user_auth_enabled": True,
         "auth_check_hours": 6,
         "auth_warning_hours": 48,
     },
@@ -158,10 +165,15 @@ class LarkCliPlatform(Platform):
         logger.info("[lark_cli] 启动(4/4):事件消费进程拉起中...")
         self.gateway = LarkGateway(self._messenger)
         logger.info("[lark_cli] 飞书网关就绪(供其他插件调用 gateway.*)")
-        self._auth_task = asyncio.create_task(self._auth_loop())
+        if self._auth_monitor_enabled():
+            self._auth_task = asyncio.create_task(self._auth_loop())
         async for msg in self._stream.stream():
             abm = await self.convert_message(msg)
             await self.handle_msg(abm, msg.chat_id)
+
+    def _auth_monitor_enabled(self) -> bool:
+        """是否开启用户登录态周期维护。"""
+        return bool(self.config.get("user_auth_enabled", True))
 
     # ── 管理员通知与认证闭环 ──
 
