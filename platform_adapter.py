@@ -34,6 +34,7 @@ try:  # 优先使用插件内 vendored 副本(与打包版本严格一致),缺�
         LarkMessenger,
         NormalizedLarkMessage,
         bundled_cli_platform,
+        ensure_bot_credentials,
         ensure_bundled_cli,
         ensure_short_home,
         find_bundled_cli,
@@ -49,6 +50,7 @@ except ImportError:  # 开发环境:工作区源码或 pip 安装版
         LarkMessenger,
         NormalizedLarkMessage,
         bundled_cli_platform,
+        ensure_bot_credentials,
         ensure_bundled_cli,
         ensure_short_home,
         find_bundled_cli,
@@ -65,7 +67,7 @@ VENDOR_DIR = PLUGIN_DIR / "vendor" / "lark-cli"
 @register_platform_adapter(
     "lark_cli",
     "lark-cli 平台适配器(bot 身份收发)",
-    default_config_tmpl={"enabled_chats": []},
+    default_config_tmpl={"enabled_chats": [], "app_id": "", "app_secret": ""},
 )
 class LarkCliPlatform(Platform):
     def __init__(self, platform_config: dict, platform_settings: dict, event_queue) -> None:
@@ -84,6 +86,15 @@ class LarkCliPlatform(Platform):
         # 登录态目录为本插件内部事务:只放在自己的数据目录下,不跨插件共享
         legacy_home = str(self.config.get("lark_cli_home") or "").strip()  # 兼容旧配置
         state_home = Path(legacy_home) if legacy_home else resolve_state_home(data_dir)
+        app_id = str(self.config.get("app_id") or "")
+        app_secret = str(self.config.get("app_secret") or "")
+        if ensure_bot_credentials(state_home, app_id=app_id, app_secret=app_secret):
+            logger.info("[lark_cli] bot 凭据就绪(app_id=%s)", app_id)
+        else:
+            logger.warning(
+                "[lark_cli] 未配置 app_id/app_secret,事件消费将无法通过鉴权;"
+                "请在平台实例配置中填写"
+            )
         runtime_home = ensure_short_home(state_home)
         if runtime_home != state_home:
             logger.info(
