@@ -68,19 +68,49 @@ VENDOR_DIR = PLUGIN_DIR / "vendor" / "lark-cli"
 # 群聊正文开头的 @提及(飞书渲染形如 "@插件Bot ")
 _LEADING_MENTION = re.compile(r"^@\S+\s+")
 
+LARK_CONFIG_METADATA = {
+    "app_id": {
+        "description": "飞书应用 App ID",
+        "type": "string",
+        "hint": "cli_xxx 开头;在飞书开放平台应用凭证页面获取",
+    },
+    "app_secret": {
+        "description": "飞书应用 App Secret",
+        "type": "string",
+        "hint": "与 App ID 配套;bot 身份收发凭据来源",
+    },
+    "notify_umos": {
+        "description": "管理通知目标 UMO 列表",
+        "type": "list",
+        "hint": "登录态异常/授权链接等卡片推送到这些会话(取末段 oc_/ou_)",
+    },
+    "auth_check_hours": {
+        "description": "登录态健康检查间隔(小时)",
+        "type": "int",
+        "hint": "状态恶化时自动发起重新授权并推卡片",
+    },
+    "auth_warning_hours": {
+        "description": "登录态临期阈值(小时)",
+        "type": "int",
+        "hint": "剩余有效期低于该值即视为临期并提醒",
+    },
+}
+
 
 @register_platform_adapter(
     "lark_cli",
     "lark-cli 平台适配器(bot 身份收发)",
     default_config_tmpl={
-        "enabled_chats": [],
         "app_id": "",
         "app_secret": "",
         "notify_umos": [],
         "auth_check_hours": 6,
         "auth_warning_hours": 48,
     },
+    config_metadata=LARK_CONFIG_METADATA,
 )
+
+
 class LarkCliPlatform(Platform):
     def __init__(self, platform_config: dict, platform_settings: dict, event_queue) -> None:
         # manager 固定传 (config, settings, event_queue);基类收 (config, event_queue)
@@ -130,8 +160,6 @@ class LarkCliPlatform(Platform):
         logger.info("[lark_cli] 飞书网关就绪(供其他插件调用 gateway.*)")
         self._auth_task = asyncio.create_task(self._auth_loop())
         async for msg in self._stream.stream():
-            if not self._chat_enabled(msg.chat_id, msg.chat_type):
-                continue
             abm = await self.convert_message(msg)
             await self.handle_msg(abm, msg.chat_id)
 
@@ -310,20 +338,6 @@ class LarkCliPlatform(Platform):
             return None
 
     # ---- 接收 ----------------------------------------------------------
-
-    def _chat_enabled(self, chat_id: str, chat_type: str) -> bool:
-        """enabled_chats 白名单;空列表 = 不限制。
-
-        条目支持标准 UMO(``lark_cli:GroupMessage:oc_xx``)或裸 chat_id。
-        """
-        allowed = [str(c).strip() for c in self.config.get("enabled_chats") or []]
-        if not allowed:
-            return True
-        msg_type = (
-            MessageType.GROUP_MESSAGE if chat_type == "group" else MessageType.FRIEND_MESSAGE
-        )
-        umo = f"{self.meta().name}:{msg_type.value}:{chat_id}"
-        return chat_id in allowed or umo in allowed
 
     async def convert_message(self, msg: NormalizedLarkMessage) -> AstrBotMessage:
         abm = AstrBotMessage()

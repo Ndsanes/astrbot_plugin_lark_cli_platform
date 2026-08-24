@@ -14,7 +14,7 @@ from . import platform_adapter  # noqa: F401  # 导入即注册 lark_cli 平台�
 PLUGIN_NAME = "astrbot_plugin_lark_cli_platform"
 
 
-@register(PLUGIN_NAME, "NDsans", "lark-cli 平台适配器插件(飞书网关)", "v0.3.0")
+@register(PLUGIN_NAME, "NDsans", "lark-cli 平台适配器插件(飞书网关)", "v0.3.1")
 class LarkCliPlatformPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
