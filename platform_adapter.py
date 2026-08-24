@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from pathlib import Path
 
 from astrbot.api import logger
@@ -62,6 +63,9 @@ from .platform_event import LarkCliPlatformEvent, deliver_chain
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 VENDOR_DIR = PLUGIN_DIR / "vendor" / "lark-cli"
+
+# 群聊正文开头的 @提及(飞书渲染形如 "@插件Bot ")
+_LEADING_MENTION = re.compile(r"^@\S+\s+")
 
 
 @register_platform_adapter(
@@ -204,9 +208,12 @@ class LarkCliPlatform(Platform):
         )
         if msg.chat_type == "group":
             abm.group_id = msg.chat_id
-        abm.message_str = msg.text
+        # 群聊文本以"@某名 "开头(飞书把提及渲染进正文):剥掉一次,
+        # 否则 wake/命令解析都会被前缀卡住
+        text = _LEADING_MENTION.sub("", msg.text, count=1) if msg.chat_type == "group" else msg.text
+        abm.message_str = text
         abm.sender = MessageMember(user_id=msg.sender_id, nickname=msg.sender_name or msg.sender_id)
-        abm.message = [Plain(text=msg.text)]
+        abm.message = [Plain(text=text)]
         abm.raw_message = msg.raw
         abm.self_id = "lark_cli_bot"
         abm.session_id = msg.chat_id
