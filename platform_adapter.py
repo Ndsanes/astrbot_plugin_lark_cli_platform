@@ -72,12 +72,12 @@ LARK_CONFIG_METADATA = {
     "app_id": {
         "description": "飞书应用 App ID",
         "type": "string",
-        "hint": "cli_xxx 开头;在飞书开放平台应用凭证页面获取",
+        "hint": "必填;cli_xxx 开头,在飞书开放平台应用凭证页面获取",
     },
     "app_secret": {
         "description": "飞书应用 App Secret",
         "type": "string",
-        "hint": "与 App ID 配套;bot 身份收发凭据来源",
+        "hint": "必填;与 App ID 配套,bot 身份收发凭据来源",
     },
     "notify_umos": {
         "description": "管理通知目标 UMO 列表",
@@ -135,11 +135,11 @@ class LarkCliPlatform(Platform):
         app_id = str(self.config.get("app_id") or "")
         app_secret = str(self.config.get("app_secret") or "")
         if ensure_bot_credentials(state_home, app_id=app_id, app_secret=app_secret):
-            logger.info("[lark_cli] bot 凭据就绪(app_id=%s)", app_id)
+            logger.info("[lark_cli] bot 凭据已同步(来源:平台配置,app_id=%s)", app_id)
         else:
-            logger.warning(
-                "[lark_cli] 未配置 app_id/app_secret,事件消费将无法通过鉴权;"
-                "请在平台实例配置中填写"
+            logger.error(
+                "[lark_cli] 平台配置缺少 app_id/app_secret(必填),事件消费将无法通过鉴权;"
+                "请在 WebUI 平台实例配置中填写后重启适配器"
             )
         runtime_home = ensure_short_home(state_home)
         if runtime_home != state_home:
