@@ -1,6 +1,7 @@
 """lark_cli 平台适配器 — 把 lark-cli 的 bot 消息能力接入 AstrBot Platform API。
 
-身份固定 bot(收发均为 ``--as bot``),不提供任何身份选择配置。
+身份模型:消息面(收发)固定 bot(``--as bot``);user 登录态由本适配器维护
+(设备授权 + 周期健康检查),业务能力经 LarkGateway 透传时按需选身份。
 事件链:lark-cli NDJSON → kit EventStream(归一化/去重/自消息过滤)→
 convert_message → LarkCliPlatformEvent → commit_event。
 """

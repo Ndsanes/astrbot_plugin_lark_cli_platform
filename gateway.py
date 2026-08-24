@@ -19,6 +19,7 @@ try:  # 优先使用插件内 vendored 副本(与打包版本严格一致),缺�
         LarkKitError,
         LarkMessenger,
         RateLimiter,
+        apply_identity,
         run_lark_cli,
         run_lark_cli_json,
     )
@@ -28,14 +29,17 @@ except ImportError:  # 开发环境:工作区源码或 pip 安装版
         LarkKitError,
         LarkMessenger,
         RateLimiter,
+        apply_identity,
         run_lark_cli,
         run_lark_cli_json,
     )
 
-__all__ = ["LarkGateway", "LarkGatewayError"]
-
 _MEDIA_TIMEOUT_S = 60.0
 _AUTH_TIMEOUT_S = 660.0
+# 通配层禁代理的首命令:前五者触及凭据/CLI 自身管理,event 是平台自管长连接。
+_PROTECTED_FIRST_TOKENS = frozenset(
+    {"auth", "config", "profile", "update", "doctor", "event", "help", "__complete"}
+)
 
 
 class LarkGatewayError(Exception):
@@ -92,17 +96,74 @@ class LarkGateway:
         *,
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
+        as_identity: str = "bot",
     ) -> dict[str, Any]:
         """任意 open-apis 端点透传(lark-cli ``api`` 逃逸通道)。
 
         成功返回响应 JSON 的 data 部分;非 2xx 或鉴权失败抛 LarkGatewayError。
+        as_identity 显式钉死调用身份,默认 bot——不钉时 CLI defaultAs=auto 会
+        在双身份并存(管理员完成过设备授权)时静默解析为 user。
         """
         args = ["api", method.upper(), path]
         if params is not None:
             args += ["--params", json.dumps(params, ensure_ascii=False)]
         if data is not None:
             args += ["--data", json.dumps(data, ensure_ascii=False)]
-        envelope = await self._run(args)
+        envelope = await self._run(apply_identity(args, as_identity))
+        doc = envelope.document
+        if isinstance(doc, dict) and doc:
+            return doc
+        payload = envelope.data
+        return payload if isinstance(payload, dict) else {}
+
+    # ── 通用命令通配层 ──
+
+    async def call(
+        self,
+        cli_args: list[str],
+        *,
+        as_identity: str = "bot",
+        timeout_s: float = 30.0,
+        cwd: str | None = None,
+    ) -> dict[str, Any]:
+        """通用 lark-cli 命令透传(typed/shortcut 命令的通配层)。
+
+        与逐能力包装相对的通用通道:``await gw.call(["wiki", "+node-list",
+        "--space-id", ...])`` 即可使用 CLI 全部一次性命令,身份经 as_identity
+        显式选择(bot|user)。返回契约与 :meth:`api` 一致(document 或 data 的
+        dict 部分)。需要 cwd 相对路径语义的命令(下载/上传类)传 cwd。
+
+        守卫(登录态与 CLI 管理由平台适配器自管,网关只代理业务面):
+        - cli_args 必须为非空字符串列表;
+        - 首个 token 不得是 auth/config/profile/update/doctor/event/help/
+          __complete(前五者触及凭据与 CLI 自身,event 是平台自管的长连接);
+        - 不接受自带 --as / --profile(身份单一权威在 as_identity 参数)。
+
+        high-risk-write 命令需要 ``--yes``,由调用方自行确认后显式传入。
+        """
+        if (
+            not cli_args
+            or not isinstance(cli_args, list)
+            or not all(isinstance(a, str) for a in cli_args)
+        ):
+            raise LarkGatewayError("cli_args 必须为非空字符串列表")
+        if cli_args[0] in _PROTECTED_FIRST_TOKENS:
+            raise LarkGatewayError(
+                f"网关不代理 {cli_args[0]!r} 命令(登录态/CLI 管理/事件流由平台自管)"
+            )
+        for flag in ("--as", "--profile"):
+            if flag in cli_args:
+                raise LarkGatewayError(f"cli_args 内禁止自带 {flag}(请用 as_identity 参数)")
+        try:
+            await self.limiter.acquire()
+            envelope = await run_lark_cli(
+                apply_identity(list(cli_args), as_identity),
+                extra_env=self._messenger_env(),
+                timeout_s=timeout_s,
+                cwd=cwd,
+            )
+        except LarkKitError as exc:
+            raise _wrap(exc) from exc
         doc = envelope.document
         if isinstance(doc, dict) and doc:
             return doc
